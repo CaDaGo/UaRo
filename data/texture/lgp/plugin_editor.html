@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>plugin.ini Editor (HTML)</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; }
+  textarea { width: 100%; height: 180px; font-family: monospace; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+  th, td { border: 1px solid #ccc; padding: 4px 6px; font-size: 13px; }
+  th { background: #eee; }
+  input[type="text"] { width: 100%; box-sizing: border-box; }
+  .preview-cell { text-align: center; }
+</style>
+</head>
+<body>
+<h2>plugin.ini Editor (paste mode)</h2>
+
+<h3>1. Paste your plugin.ini here</h3>
+<textarea id="inputIni" placeholder="Paste plugin.ini content here"></textarea>
+<button id="parseBtn">Parse</button>
+
+<h3>2. Edit colors</h3>
+<table id="skillsTable">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Name</th>
+      <th>Image</th>
+      <th>Color</th>
+      <th>Preview</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<h3>3. Copy updated plugin.ini</h3>
+<button id="rebuildBtn">Rebuild INI</button>
+<textarea id="outputIni" placeholder="Updated plugin.ini will appear here"></textarea>
+
+<script>
+// ---------- Helpers ----------
+function iniToTk(color) {
+  if (!color || !color.startsWith("0x") || color.length !== 10) return "#ffffff";
+  return "#" + color.slice(4).toLowerCase();
+}
+function tkToIni(hex, oldIni) {
+  if (!hex) return oldIni || "0xFFFFFFFF";
+  hex = hex.replace("#", "");
+  let alpha = "FF";
+  if (oldIni && oldIni.startsWith("0x") && oldIni.length === 10) {
+    alpha = oldIni.slice(2, 4);
+  }
+  return "0x" + alpha + hex.toUpperCase();
+}
+
+// ---------- Parsing ----------
+function parseIni(text) {
+  const lines = text.split(/\r?\n/);
+  const entries = {};
+  let section = null;
+  let lastComment = null;
+
+  for (const line of lines) {
+    const stripped = line.trim();
+
+    if (stripped.startsWith("[") && stripped.endsWith("]")) {
+      section = stripped.slice(1, -1);
+      lastComment = null;
+      continue;
+    }
+
+    if (stripped.startsWith(";")) {
+      lastComment = line;
+      continue;
+    }
+
+    const eqIdx = stripped.indexOf("=");
+    if (eqIdx !== -1) {
+      const key = stripped.slice(0, eqIdx).trim();
+      const value = stripped.slice(eqIdx + 1).trim();
+
+      if (!entries[key]) {
+        entries[key] = {
+          id: key,
+          displayName: key,
+          comment: null,
+          image: null,
+          color: null,
+          imageSection: false,
+          colorSection: false
+        };
+      }
+
+      if (lastComment) {
+        entries[key].comment = lastComment;
+        const c = lastComment.replace(";", "").trim();
+        if (c.includes("#")) {
+          entries[key].displayName = c.split("#")[1].trim();
+        } else {
+          entries[key].displayName = c;
+        }
+        lastComment = null;
+      }
+
+      if (section === "LGP::CELL_COLOR") {
+        entries[key].color = value;
+        entries[key].colorSection = true;
+      }
+
+      if (section === "LGP::CELL_IMAGE") {
+        entries[key].image = value;
+        entries[key].imageSection = true;
+      }
+    }
+  }
+
+  return { lines, entries };
+}
+
+// ---------- Rebuild ----------
+function rebuildIni(originalLines, entries) {
+  const out = [];
+  let i = 0;
+  let section = null;
+  const sortedKeys = Object.keys(entries).sort();
+
+  while (i < originalLines.length) {
+    const line = originalLines[i];
+    const stripped = line.trim();
+
+    if (stripped.startsWith("[") && stripped.endsWith("]")) {
+      section = stripped.slice(1, -1);
+      out.push(line);
+      i++;
+
+      if (section === "LGP::CELL_IMAGE" || section === "LGP::CELL_COLOR") {
+        while (i < originalLines.length) {
+          const t = originalLines[i].trim();
+          if (t.startsWith("[") && t.endsWith("]")) break;
+          i++;
+        }
+
+        for (const key of sortedKeys) {
+          const e = entries[key];
+
+          if (section === "LGP::CELL_IMAGE" && e.imageSection) {
+            if (e.comment) out.push(e.comment);
+            out.push(`${key} = ${e.image}`);
+            out.push("");
+          }
+
+          if (section === "LGP::CELL_COLOR" && e.colorSection) {
+            if (e.comment) out.push(e.comment);
+            out.push(`${key}=${e.color}`);
+            out.push("");
+          }
+        }
+        continue;
+      }
+
+      while (i < originalLines.length) {
+        const t = originalLines[i].trim();
+        if (t.startsWith("[") && t.endsWith("]")) break;
+        out.push(originalLines[i]);
+        i++;
+      }
+      continue;
+    }
+
+    out.push(line);
+    i++;
+  }
+
+  return out.join("\n") + "\n";
+}
+
+// ---------- UI ----------
+let originalLines = [];
+let entries = {};
+
+document.getElementById("parseBtn").addEventListener("click", () => {
+  const text = document.getElementById("inputIni").value;
+  if (!text.trim()) {
+    alert("Paste plugin.ini first.");
+    return;
+  }
+  const parsed = parseIni(text);
+  originalLines = parsed.lines;
+  entries = parsed.entries;
+  renderTable();
+});
+
+function renderTable() {
+  const tbody = document.querySelector("#skillsTable tbody");
+  tbody.innerHTML = "";
+  const keys = Object.keys(entries).sort();
+
+  for (const key of keys) {
+    const e = entries[key];
+    const tr = document.createElement("tr");
+
+    const tdId = document.createElement("td");
+    tdId.textContent = key;
+    tr.appendChild(tdId);
+
+    const tdName = document.createElement("td");
+    tdName.textContent = e.displayName;
+    tr.appendChild(tdName);
+
+    const tdImage = document.createElement("td");
+    const imgInput = document.createElement("input");
+    imgInput.type = "text";
+    imgInput.value = e.image || "";
+    imgInput.addEventListener("input", () => e.image = imgInput.value.trim());
+    tdImage.appendChild(imgInput);
+    tr.appendChild(tdImage);
+
+    const tdColor = document.createElement("td");
+    const colorInput = document.createElement("input");
+    colorInput.type = "text";
+    colorInput.value = e.color || "";
+    colorInput.addEventListener("input", () => {
+      e.color = colorInput.value.trim();
+      colorPicker.value = iniToTk(e.color);
+    });
+    tdColor.appendChild(colorInput);
+    tr.appendChild(tdColor);
+
+    const tdPreview = document.createElement("td");
+    tdPreview.className = "preview-cell";
+    const colorPicker = document.createElement("input");
+    colorPicker.type = "color";
+    colorPicker.value = iniToTk(e.color);
+    colorPicker.addEventListener("input", () => {
+      e.color = tkToIni(colorPicker.value, e.color);
+      colorInput.value = e.color;
+    });
+    tdPreview.appendChild(colorPicker);
+    tr.appendChild(tdPreview);
+
+    tbody.appendChild(tr);
+  }
+}
+
+document.getElementById("rebuildBtn").addEventListener("click", () => {
+  if (!originalLines.length) {
+    alert("Parse an INI first.");
+    return;
+  }
+  const out = rebuildIni(originalLines, entries);
+  document.getElementById("outputIni").value = out;
+});
+</script>
+</body>
+</html>
+
